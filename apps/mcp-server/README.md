@@ -27,7 +27,7 @@ uv run job-research-mcp          # serves http://127.0.0.1:8000/mcp
 | Env var | Default | Meaning |
 |---|---|---|
 | `MCP_API_KEY` | (none) | Required bearer token for `/mcp`. The server refuses to start if auth is on and this is unset. |
-| `AUTH_DISABLED` | `false` | `true` turns auth off. **Local testing only**, e.g. trying the server as a Claude Desktop custom connector, which supports OAuth or no auth but not custom headers. |
+| `AUTH_DISABLED` | `false` | `true` turns auth off. **Local testing only**, e.g. trying the server as a Claude Desktop custom connector, which supports OAuth or no auth but not custom headers. The server refuses to start with it unless `HOST` is `127.0.0.1`, `localhost` or `::1`, so it can't take effect in the Docker image or on Railway. |
 | `HOST` | `127.0.0.1` | Bind address. |
 | `PORT` | `8000` | Bind port. |
 

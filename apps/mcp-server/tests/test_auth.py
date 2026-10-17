@@ -1,5 +1,9 @@
+from collections.abc import MutableMapping
+from typing import Any
+
 import httpx
 import pytest
+from starlette.types import Receive, Scope, Send
 
 from job_research_mcp.auth import AuthConfigError, BearerAuthMiddleware, api_key_from_env
 from job_research_mcp.server import MCP_PATH
@@ -81,3 +85,43 @@ def test_auth_on_without_key_refuses_to_start(environ: dict[str, str]) -> None:
 def test_middleware_rejects_empty_key() -> None:
     with pytest.raises(ValueError):
         BearerAuthMiddleware(app=lambda scope, receive, send: None, api_key="")  # type: ignore[arg-type,return-value]
+
+
+async def _call_middleware(scope: dict[str, Any]) -> tuple[list[MutableMapping[str, Any]], list[str]]:
+    """Drive BearerAuthMiddleware directly; return the messages it sent and the scope types the app saw."""
+    seen: list[str] = []
+    sent: list[MutableMapping[str, Any]] = []
+
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
+        seen.append(scope["type"])
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "websocket.connect"}
+
+    async def send(message: MutableMapping[str, Any]) -> None:
+        sent.append(message)
+
+    await BearerAuthMiddleware(app, TEST_API_KEY)(scope, receive, send)
+    return sent, seen
+
+
+async def test_lifespan_passes_through() -> None:
+    sent, seen = await _call_middleware({"type": "lifespan"})
+    assert seen == ["lifespan"] and sent == []
+
+
+async def test_websocket_without_token_is_closed_not_given_http_401() -> None:
+    sent, seen = await _call_middleware({"type": "websocket", "path": "/mcp", "headers": []})
+    assert seen == []
+    assert sent == [{"type": "websocket.close", "code": 1008}]
+
+
+async def test_websocket_to_public_path_still_needs_token() -> None:
+    sent, seen = await _call_middleware({"type": "websocket", "path": "/health", "headers": []})
+    assert seen == [] and sent[0]["type"] == "websocket.close"
+
+
+async def test_websocket_with_token_passes_through() -> None:
+    headers = [(b"authorization", f"Bearer {TEST_API_KEY}".encode())]
+    sent, seen = await _call_middleware({"type": "websocket", "path": "/mcp", "headers": headers})
+    assert seen == ["websocket"] and sent == []
