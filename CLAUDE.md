@@ -13,6 +13,7 @@ Startup Job Research Agent: given a company, research Funding, Team, Tech stack 
 - Small, reviewable PRs. Stop after each one for review.
 - In each PR description, explain the key design choice in 2–3 sentences, including the alternative you rejected.
 - Don't build ahead of the current milestone (see the Milestones section of docs/PLAN.md).
+- In every PR that makes a design decision, add or update its entry in docs/DECISIONS.md in that same PR.
 
 ## Conventions
 
