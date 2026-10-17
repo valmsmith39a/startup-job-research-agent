@@ -17,12 +17,12 @@ A running log of key design decisions, newest last. Each entry should take about
 - Tradeoff: More code than a pass-through, and the model can't answer questions that need the job description. Depending on the client, the model may get both copies, roughly doubling tokens per call.
 - Would revisit if: The agent needs description text (e.g. tech-stack extraction); then add a separate per-job tool rather than widening this one. Or if token cost or context size becomes a problem; then keep `structuredContent` as the real data and return a short text summary instead of the full copy (e.g. "27 matching jobs at Ashby out of 63").
 
-## Static bearer-token middleware (Planned, PR 3)
-- Decision: A small ASGI middleware requires `Authorization: Bearer <MCP_API_KEY>` on everything except `/health`, using a constant-time compare. The server refuses to start if auth is on and no key is set. `AUTH_DISABLED=true` is for local testing only.
-- Why: There is one secret shared by the agent and the owner's own clients, so this is the simplest correct check. Refusing to start means a misconfigured deploy can't run open.
-- Alternative rejected: The SDK's built-in auth (`TokenVerifier` + `AuthSettings`). It is built for OAuth resource servers and advertises OAuth discovery, which clients then try to follow.
-- Tradeoff: No per-user identity, scopes or expiry; rotating the key means a redeploy.
-- Would revisit if: Other people need their own access, or a client that only supports OAuth (e.g. a Claude Desktop custom connector) must reach the deployed server.
+## Static bearer-token middleware (PR #4)
+- Decision: A small pure-ASGI middleware requires `Authorization: Bearer <MCP_API_KEY>` on everything except `/health` (constant-time compare). With auth on and no key, the server refuses to start. `AUTH_DISABLED=true` is for local testing only.
+- Why: One shared secret between the agent and the owner's own clients needs nothing more. Failing at startup means a misconfigured deploy can't run open.
+- Alternative rejected: The SDK's built-in auth (`TokenVerifier` + `AuthSettings`). It is shaped for OAuth resource servers (issuer URL, protected-resource metadata) and advertises OAuth discovery, which clients then try to follow.
+- Tradeoff: No per-user identity, scopes or expiry. Rotating the key means updating every client. Claude Desktop custom connectors can't send custom headers, so they need `AUTH_DISABLED` locally.
+- Would revisit if: Other people need their own access, or an OAuth-only client (e.g. a Claude Desktop custom connector) must reach the deployed server.
 
 ## Dockerfile for Railway (Planned, PR 4)
 - Decision: Build `apps/mcp-server` from a Dockerfile (uv, `uv sync --frozen`, non-root, binds `0.0.0.0:$PORT`).

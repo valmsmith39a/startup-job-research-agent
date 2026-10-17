@@ -2,10 +2,11 @@
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
-from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp
 
+from job_research_mcp.auth import BearerAuthMiddleware
 from job_research_mcp.tools import ashby
 
 MCP_PATH = "/mcp"
@@ -37,17 +38,23 @@ mcp.tool(
 )(ashby.get_ashby_jobs)
 
 
-def build_app(host: str = "127.0.0.1") -> Starlette:
+def build_app(*, api_key: str | None, host: str = "127.0.0.1") -> ASGIApp:
     """Build the ASGI app serving MCP at /mcp plus the custom routes.
 
     Stateless with JSON responses: every tool is a single request/response,
     so there is no per-client session to keep, and any replica can serve any
     request. `host` is passed through so the SDK can enable DNS-rebinding
     protection when bound to localhost.
+
+    `api_key` is required on every request except /health; None disables
+    auth (local testing only, see `auth.api_key_from_env`).
     """
-    return mcp.streamable_http_app(
+    app = mcp.streamable_http_app(
         streamable_http_path=MCP_PATH,
         stateless_http=True,
         json_response=True,
         host=host,
     )
+    if api_key is None:
+        return app
+    return BearerAuthMiddleware(app, api_key)

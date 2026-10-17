@@ -1,7 +1,8 @@
 import httpx
 from mcp import Client
 
-from job_research_mcp.server import MCP_PATH, mcp
+from job_research_mcp.server import mcp
+from tests.helpers import http_client
 
 
 def test_health_is_ok(server_url: str) -> None:
@@ -20,7 +21,7 @@ async def test_ping_in_process() -> None:
 
 
 async def test_ping_over_streamable_http(server_url: str) -> None:
-    async with Client(f"{server_url}{MCP_PATH}") as client:
+    async with http_client(server_url) as client:
         result = await client.call_tool("ping", {})
     assert not result.is_error
     assert result.structured_content == {"result": "pong"}
