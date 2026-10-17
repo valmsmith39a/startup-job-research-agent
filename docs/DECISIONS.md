@@ -13,8 +13,9 @@ A running log of key design decisions, newest last. Each entry should take about
 - Decision: `get_ashby_jobs` returns a Pydantic model, so the SDK publishes an output schema and sends `structuredContent`. Ashby's response is trimmed: descriptions, nested compensation tiers and unlisted jobs are dropped.
 - Why: The agent gets a stable, documented shape instead of parsing prose, and descriptions would flood the model's context.
 - Alternative rejected: A hand-built dict or formatted text (no schema, shape drifts silently), or passing Ashby's raw response through.
-- Tradeoff: More code than a pass-through, and the model can't answer questions that need the job description.
-- Would revisit if: The agent needs description text (e.g. tech-stack extraction). Then add a separate per-job tool rather than widening this one.
+- Observation: With an output schema, the SDK returns the result twice: as `structuredContent` and as a serialized JSON copy in the text block, which the MCP spec recommends for clients that only read text.
+- Tradeoff: More code than a pass-through, and the model can't answer questions that need the job description. Depending on the client, the model may get both copies, roughly doubling tokens per call.
+- Would revisit if: The agent needs description text (e.g. tech-stack extraction); then add a separate per-job tool rather than widening this one. Or if token cost or context size becomes a problem; then keep `structuredContent` as the real data and return a short text summary instead of the full copy (e.g. "27 matching jobs at Ashby out of 63").
 
 ## Static bearer-token middleware (Planned, PR 3)
 - Decision: A small ASGI middleware requires `Authorization: Bearer <MCP_API_KEY>` on everything except `/health`, using a constant-time compare. The server refuses to start if auth is on and no key is set. `AUTH_DISABLED=true` is for local testing only.
