@@ -61,7 +61,7 @@ async def test_success_trims_and_drops_unlisted() -> None:
     assert data["source_url"] == f"https://jobs.ashbyhq.com/{BOARD}"
     assert data["fetched_at"]
     assert data["total_listed_jobs"] == 3
-    assert data["total_jobs"] == 3
+    assert data["matched_jobs"] == 3
     assert [job["title"] for job in data["jobs"]] == [
         "Senior Software Engineer, Platform",
         "Machine Learning Engineer",
@@ -99,7 +99,7 @@ async def test_keyword_filter_is_case_insensitive() -> None:
 
     assert data is not None
     assert [job["title"] for job in data["jobs"]] == ["Senior Software Engineer, Platform", "Machine Learning Engineer"]
-    assert data["total_jobs"] == 2
+    assert data["matched_jobs"] == 2
     assert data["total_listed_jobs"] == 3
 
 

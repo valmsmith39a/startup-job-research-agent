@@ -20,6 +20,6 @@ async def test_real_board_returns_trimmed_jobs() -> None:
     board = os.environ.get("ASHBY_LIVE_BOARD", "ashby")
     result = await get_ashby_jobs(board)
     assert result.company == board
-    assert result.total_jobs == len(result.jobs)
+    assert result.matched_jobs == len(result.jobs)
     for job in result.jobs:
         assert job.job_url.startswith("https://jobs.ashbyhq.com/")

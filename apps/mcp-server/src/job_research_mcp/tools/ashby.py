@@ -55,7 +55,7 @@ class AshbyJobsResult(BaseModel):
     source_url: str = Field(description="Public job board page these jobs come from.")
     fetched_at: datetime
     total_listed_jobs: int = Field(description="Listed jobs on the board before keyword/remote filters.")
-    total_jobs: int = Field(description="Jobs returned after filters.")
+    matched_jobs: int = Field(description="Jobs matching the keyword/remote filters, i.e. the length of jobs.")
     jobs: list[AshbyJob]
 
 
@@ -169,6 +169,6 @@ async def get_ashby_jobs(
         source_url=BOARD_URL.format(board=quote(board, safe="")),
         fetched_at=datetime.now(UTC),
         total_listed_jobs=len(listed),
-        total_jobs=len(jobs),
+        matched_jobs=len(jobs),
         jobs=jobs,
     )
