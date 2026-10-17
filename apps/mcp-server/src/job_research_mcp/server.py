@@ -1,9 +1,12 @@
 """The MCP server: tool registry, health check, and the Streamable HTTP app."""
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+
+from job_research_mcp.tools import ashby
 
 MCP_PATH = "/mcp"
 
@@ -24,6 +27,14 @@ async def health(request: Request) -> JSONResponse:
 def ping() -> str:
     """Check that the job-research MCP server is reachable. Returns "pong"."""
     return "pong"
+
+
+mcp.tool(
+    name="get_ashby_jobs",
+    title="Ashby open roles",
+    description=ashby.DESCRIPTION,
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=True),
+)(ashby.get_ashby_jobs)
 
 
 def build_app(host: str = "127.0.0.1") -> Starlette:

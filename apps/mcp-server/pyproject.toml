@@ -5,6 +5,7 @@ description = "MCP server exposing startup job-research tools over Streamable HT
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "httpx>=0.28",
     "mcp>=2.3,<3",
     "uvicorn>=0.30",
 ]
@@ -18,11 +19,12 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = ["live: hits real external APIs; skipped unless RUN_LIVE_TESTS=1"]
