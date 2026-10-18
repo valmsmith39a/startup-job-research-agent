@@ -53,7 +53,7 @@ A running log of key design decisions, newest last. Each entry should take about
 - Would revisit if: Saved history is needed (then a checkpointer on Postgres, which also keeps tool results between turns), or conversations get long enough for request size to matter, or re-calling tools on follow-ups costs too much.
 
 ## Separate API_KEY for apps/api, same fail-closed middleware (Planned, M2 PR 1)
-- Decision: apps/api requires `Authorization: Bearer <API_KEY>` on everything except `/health`, using a copy of the MCP server's pure-ASGI middleware: constant-time compare, refuse to start when auth is on and the key is missing, `AUTH_DISABLED=true` for local testing only. `API_KEY` and `MCP_API_KEY` are different secrets.
+- Decision: apps/api requires `Authorization: Bearer <API_KEY>` on everything except `/health`, using a copy of the MCP server's pure-ASGI middleware: constant-time compare, refuse to start when auth is on and the key is missing, `AUTH_DISABLED=true` for local testing only and refused unless `HOST` is loopback, only lifespan events unchecked (as hardened in PR #5). `API_KEY` and `MCP_API_KEY` are different secrets.
 - Why: Two secrets keep the blast radius small: the web app's key (Milestone 3) can't reach the MCP server directly. Reusing the pattern means one auth design to explain.
 - Alternative rejected: Reusing `MCP_API_KEY` for both services, or extracting the middleware into a shared package (it is about 60 lines, and a shared package would complicate each app's own uv project and Railway build).
 - Tradeoff: Two copies of the middleware can drift. The browser can't hold a secret, so in Milestone 3 the Next.js server, not the browser, sends `API_KEY`.

@@ -119,12 +119,13 @@ Commands below run in the remaining right pane, from `apps/api` with the same `.
 
 ### PR 1: scaffold apps/api with auth
 
-- Scope: uv project `job-research-api` (Python 3.13), FastAPI app factory, unauthenticated `GET /health`, `API_KEY` bearer middleware copied from `apps/mcp-server` (fail closed, `AUTH_DISABLED` for local testing), entry point binding `HOST`/`PORT` (default `127.0.0.1:8001`).
+- Scope: uv project `job-research-api` (Python 3.13), FastAPI app factory, unauthenticated `GET /health`, `API_KEY` bearer middleware copied from `apps/mcp-server` as of PR #5 (fail closed, `AUTH_DISABLED` for local testing and refused unless `HOST` is loopback, only lifespan events unchecked), entry point binding `HOST`/`PORT` (default `127.0.0.1:8001`).
 - Files: `apps/api/{pyproject.toml,uv.lock,.python-version,.env.example,README.md}`, `src/job_research_api/{__init__,__main__,main,auth}.py`, `tests/{test_auth,test_health}.py`, `docs/DECISIONS.md`.
 - Acceptance criteria:
   - `GET /health` returns `{"status": "ok"}` without a token.
   - Any other path returns `401` without a valid `Authorization: Bearer $API_KEY`.
   - With auth on and `API_KEY` unset, the server exits with a clear message.
+  - `AUTH_DISABLED=true` with `HOST=0.0.0.0` refuses to start.
   - `uv run pytest` passes with no network access.
 - Test locally:
   ```bash
