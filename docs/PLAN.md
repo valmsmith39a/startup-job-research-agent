@@ -77,7 +77,7 @@ Only the current milestone gets built.
 
 1. **MCP server, one tool.** Ashby open roles tool, tested locally, deployed to Railway, verified from Claude Code.
 2. **Agent end to end, locally.** LangGraph agent in `apps/api` working through the MCP server, both running locally. See [Milestone 2 plan](#milestone-2-plan-agent-end-to-end-appsapi).
-3. **Chat UI.** Simple Next.js UI, deployed to Vercel. Also deploys `apps/api` to Railway (Dockerfile, private network to the MCP server, rate limiting and daily run cap), moved here from Milestone 2.
+3. **Chat UI.** Simple Next.js UI, deployed to Vercel. Also deploys `apps/api` to Railway, moved here from Milestone 2: first a PR adding per-IP rate limiting and the daily run cap, then the deploy PR (Dockerfile, private network to the MCP server), so the public URL is never uncapped.
 4. **Polish and breadth.** README, example reports, more tools (SEC EDGAR, web search, GitHub).
 
 ## Milestone 2 plan: agent end to end (apps/api)
@@ -87,9 +87,9 @@ Goal: `POST /chat` on a local `apps/api` runs a LangGraph agent on Claude that c
 ### Defaults
 
 - `apps/api` listens on `127.0.0.1:8001`; the MCP server keeps `8000`.
-- Model: `ANTHROPIC_MODEL`, default `claude-opus-5-5`. Only the model ID is configurable for now.
+- Model: `ANTHROPIC_MODEL`, default `claude-sonnet-5-5`. Only the model ID is configurable for now.
 - Settings come from environment variables, like `apps/mcp-server` (no `.env` auto-loading; use `set -a; source .env; set +a`).
-- `/chat` accepts `user` and `assistant` text turns only. Earlier tool calls are not sent back; the agent re-runs tools when it needs fresh data.
+- `/chat` accepts `user` and `assistant` text turns only. Earlier tool calls and results are not sent back, so the system prompt tells the model to call the tools again rather than answer from its earlier summaries (tradeoff logged in DECISIONS.md).
 - Out of scope: Docker and Railway for `apps/api`, rate limiting and the daily run cap (all Milestone 3), the structured JSON report and the orchestrator-workers graph (later, once the single loop works).
 
 ### Running both servers locally
@@ -140,12 +140,15 @@ Commands below run in the remaining right pane, from `apps/api` with the same `.
 
 ### PR 2: load MCP tools at startup
 
-- Scope: `MultiServerMCPClient` with `streamable_http` transport, `MCP_SERVER_URL` (default `http://127.0.0.1:8000/mcp`) and `Authorization: Bearer $MCP_API_KEY`. Tools load once in the FastAPI lifespan onto `app.state.tools`; startup fails with a clear message if the MCP server is down or rejects the key. An authenticated `GET /tools` lists the loaded tool names and descriptions, so the wiring is checkable before the agent exists. Adds the one opt-in integration test.
-- Files: `src/job_research_api/{mcp_tools,main}.py`, `tests/test_mcp_tools.py`, `tests/test_integration.py`, `pyproject.toml` (adds `langchain-mcp-adapters`, `integration` pytest marker), `.env.example`, `README.md`, `docs/DECISIONS.md`.
+- Scope: `MCPAdapter` from `langchain.mcp` wrapping `fastmcp.Client(MCP_SERVER_URL, auth=MCP_API_KEY)` (default URL `http://127.0.0.1:8000/mcp`; the string `auth` becomes a bearer token). In the FastAPI lifespan, the adapter's context is entered, `list_tools()` runs once, the tools go on `app.state.tools`, and the client stays open until shutdown. Startup fails with a clear message if the MCP server is down or rejects the key. The `LangChainBetaWarning` from importing `langchain.mcp` is silenced in one place, with a comment saying why. An authenticated `GET /tools` lists the loaded tool names and descriptions, so the wiring is checkable before the agent exists. Adds the one opt-in integration test.
+- Files: `src/job_research_api/{mcp_tools,main}.py`, `tests/test_mcp_tools.py`, `tests/test_integration.py`, `pyproject.toml` (adds `langchain[mcp]>=1.4.0,<1.5`, `integration` pytest marker), `uv.lock`, `.env.example` (adds `MCP_SERVER_URL`, `MCP_API_KEY`), `README.md`, `docs/DECISIONS.md`.
 - Acceptance criteria:
   - With the MCP server running, `GET /tools` lists `ping` and `get_ashby_jobs`.
   - With the MCP server stopped, or a wrong `MCP_API_KEY`, apps/api refuses to start and names the cause.
-  - Unit tests use a stubbed tool loader; no network.
+  - Unit tests run without network, against a tiny in-process `MCPServer` that `MCPAdapter` accepts directly as its target:
+    - A tool that runs and reports an error (`isError`) returns a `ToolMessage` with `status="error"` carrying the server's message. It does not raise.
+    - A transport failure (the client pointed at a closed localhost port) raises out of the tool call. It is not turned into a `ToolMessage`.
+    - A successful call returns the tool's text, with `structuredContent` in the message's artifact.
   - `RUN_INTEGRATION_TESTS=1 uv run pytest -m integration` loads tools from the real local MCP server and calls `ping` through the adapter (gets `"pong"`). Skipped by default.
 - Test locally (MCP server running in the left pane):
   ```bash
@@ -153,17 +156,18 @@ Commands below run in the remaining right pane, from `apps/api` with the same `.
   RUN_INTEGRATION_TESTS=1 uv run pytest -m integration
   curl -s -H "Authorization: Bearer $API_KEY" http://127.0.0.1:8001/tools
   ```
-  Then stop the MCP server (Ctrl-C in the left pane) and restart apps/api: it should refuse to start.
+  Then stop the MCP server (Ctrl-C in the left pane) and restart apps/api: it should refuse to start. Restart the MCP server with a different `MCP_API_KEY`: apps/api should refuse to start with a 401 cause.
 
 ### PR 3: the agent graph
 
-- Scope: `build_graph(model, tools)` returns a compiled `StateGraph(MessagesState)` with a `model` node (system prompt + `model.bind_tools(tools)`), a `ToolNode(tools)`, and a hand-written conditional edge (`tools` if the last AI message has tool calls, else `END`). The model and tools are injected, so tests pass fakes. The system prompt tells the model to cite a source URL for every fact and to say when a tool found nothing. `AGENT_RECURSION_LIMIT` (default 25) is applied on every run. No HTTP endpoint yet.
+- Scope: `build_graph(model, tools)` returns a compiled `StateGraph(MessagesState)` with a `model` node (system prompt + `model.bind_tools(tools)`), a `ToolNode(tools)`, and a hand-written conditional edge (`tools` if the last AI message has tool calls, else `END`). The model and tools are injected, so tests pass fakes. The system prompt tells the model to cite a source URL for every fact, to say when a tool found nothing, and to call the tools again for any fact a follow-up needs instead of answering from earlier turns' summaries. `AGENT_RECURSION_LIMIT` (default 25) is applied on every run. No HTTP endpoint yet.
 - Files: `src/job_research_api/{graph,prompts}.py`, `tests/fakes.py` (scripted fake chat model), `tests/test_graph.py`, `tests/test_integration.py` (extended), `pyproject.toml` (adds `langgraph`, `langchain-anthropic`), `docs/DECISIONS.md`.
 - Acceptance criteria:
   - A scripted run of "tool call, then final answer" visits `model → tools → model → END`, and the final message contains the tool result's URL.
   - A run with no tool calls ends after one model step.
   - A model that always calls a tool stops with `GraphRecursionError` at the configured limit.
-  - A tool that raises comes back to the model as an error `ToolMessage`, not a crash.
+  - A tool error (`ToolException`, as the MCP tools raise for `isError`) comes back to the model as a `ToolMessage` with `status="error"` and the loop continues; any other exception, such as a transport failure, propagates out of the graph (`ToolNode`'s default error handling).
+  - The system prompt contains the cite-every-fact and re-call-tools instructions (asserted, so they can't be dropped silently).
   - The integration test drives the graph with the scripted model against the real MCP server (`get_ashby_jobs` for board `ashby`) and gets a `ToolMessage` with `jobs.ashbyhq.com` URLs. Still no Claude call.
 - Test locally:
   ```bash
@@ -173,10 +177,10 @@ Commands below run in the remaining right pane, from `apps/api` with the same `.
 
 ### PR 4: POST /chat (JSON)
 
-- Scope: `POST /chat` with body `{"messages": [{"role": "user" | "assistant", "content": str}, ...]}`. Validates that the list is non-empty, ends with a `user` turn, and stays under size limits (`CHAT_MAX_MESSAGES`, `CHAT_MAX_CHARS`). Runs the graph with `ChatAnthropic(model=ANTHROPIC_MODEL)` and returns `{"message": {"role": "assistant", "content": str}, "tool_calls": [{"name": str, "args": dict}]}` (the tool calls show what the agent did). The step limit maps to `500 {"error": "step_limit"}`; Anthropic API errors map to `502 {"error": "upstream"}`. Startup fails if `ANTHROPIC_API_KEY` is unset.
+- Scope: `POST /chat` with body `{"messages": [{"role": "user" | "assistant", "content": str}, ...]}`. Validates that the list is non-empty, ends with a `user` turn, and stays under size limits (`CHAT_MAX_MESSAGES`, `CHAT_MAX_CHARS`). Runs the graph with `ChatAnthropic(model=ANTHROPIC_MODEL)` and returns `{"message": {"role": "assistant", "content": str}, "tool_calls": [{"name": str, "args": dict}]}` (the tool calls show what the agent did). The step limit maps to `500 {"error": "step_limit"}`; Anthropic API errors map to `502 {"error": "upstream"}` and MCP transport failures to `502 {"error": "mcp_unavailable"}`. Startup fails if `ANTHROPIC_API_KEY` is unset.
 - Files: `src/job_research_api/{chat,main}.py`, `tests/test_chat.py`, `.env.example` (adds `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `AGENT_RECURSION_LIMIT`), `README.md`, `docs/DECISIONS.md`.
 - Acceptance criteria:
-  - Unit tests override the model with the scripted fake: happy path, a conversation with earlier turns, `422` on an empty list or a trailing `assistant` turn, `401` without the key, `500` on the step limit.
+  - Unit tests override the model with the scripted fake: happy path, a conversation with earlier turns, `422` on an empty list or a trailing `assistant` turn, `401` without the key, `500` on the step limit, `502` when a tool's transport fails.
   - Manual: a real question about an Ashby company returns an answer whose job facts carry `jobs.ashbyhq.com` URLs.
 - Test locally (this is the only step that spends Anthropic credits):
   ```bash

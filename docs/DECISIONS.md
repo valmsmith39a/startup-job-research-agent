@@ -38,19 +38,19 @@ A running log of key design decisions, newest last. Each entry should take about
 - Tradeoff: More code to own than the one-liner. Milestone 2 is a single tool-calling loop, not yet the orchestrator, four parallel workers and synthesizer described in PLAN.md.
 - Would revisit if: The single loop is good enough on real companies (then keep it), or more tools land in Milestone 4 (then split into the parallel workers).
 
-## MCP tools through langchain-mcp-adapters, loaded once (Planned, M2 PR 2)
-- Decision: Use `MultiServerMCPClient` from `langchain-mcp-adapters` with the `streamable_http` transport and an `Authorization: Bearer $MCP_API_KEY` header. Call `get_tools()` once in the FastAPI lifespan and keep the tools on `app.state`. If the MCP server is unreachable or rejects the key, apps/api refuses to start.
-- Why: The adapter turns MCP tool schemas into LangChain tools that `bind_tools` and `ToolNode` accept as they are. Loading at startup keeps tool discovery off the request path, and failing at startup surfaces a wrong URL or key immediately instead of on the first chat.
-- Alternative rejected: The `mcp` SDK's `ClientSession` with hand-written conversion to LangChain tools (more code, same result), or listing tools on every request (an extra round trip per chat).
-- Tradeoff: The tool list is fixed until apps/api restarts. Each tool call still opens its own short MCP session, which suits the stateless server. The adapter currently pins `mcp<2`, while apps/mcp-server runs `mcp` 2.x; that is fine over the wire because they are separate uv projects, but both versions need watching.
-- Would revisit if: Tools change while apps/api is running, or the adapter lags the protocol.
+## MCP tools through langchain.mcp, loaded once (Planned, M2 PR 2)
+- Decision: Use `MCPAdapter` from `langchain.mcp` (the `langchain[mcp]` extra, constrained to `>=1.4.0,<1.5` and pinned exactly in `uv.lock`) around a `fastmcp.Client` for `MCP_SERVER_URL` with `auth=MCP_API_KEY`; a string `auth` becomes FastMCP's `BearerAuth`, which sends `Authorization: Bearer <key>`. Tools are listed once in the FastAPI lifespan, which also holds the client open until shutdown, and kept on `app.state`. If the MCP server is unreachable or rejects the key, apps/api refuses to start.
+- Why: It is LangChain's own MCP integration, built on FastMCP 4 and therefore `mcp` 2.x, the same SDK major as apps/mcp-server. It separates the two failure kinds cleanly: a tool that runs and reports an error (`isError`) comes back to the model as a `ToolMessage` with `status="error"` so it can retry, while a transport failure raises and ends the run. Listing tools at startup keeps discovery off the request path and surfaces a wrong URL or key immediately.
+- Alternative rejected: `langchain-mcp-adapters` (`MultiServerMCPClient`), the older separate package, which still pins `mcp<2`; or the `mcp` SDK's `ClientSession` with hand-written conversion to LangChain tools.
+- Tradeoff: `langchain.mcp` is beta: importing it emits a `LangChainBetaWarning` and its API may change between minor releases, hence the `<1.5` cap. The tool list is fixed until apps/api restarts. The adapter answers server elicitation requests with a LangGraph `interrupt()` by default; our server never elicits, so this is unused.
+- Would revisit if: The beta API breaks in a minor release, or tools change while apps/api is running.
 
 ## Stateless /chat, JSON first (Planned, M2 PR 4 and 5)
 - Decision: `POST /chat` takes the full message history (`user` and `assistant` text turns) on every request and returns the assistant's reply as JSON. Server-Sent Events streaming comes later as a separate `POST /chat/stream`; `/chat` stays JSON.
 - Why: No conversation store, so no database and no session affinity (PLAN.md defers Postgres). JSON first means the agent can be tested with curl and plain pytest before streaming adds event framing.
 - Alternative rejected: Server-side conversation state (LangGraph checkpointer keyed by a thread ID), which needs persistence to survive restarts, and streaming from the first PR.
-- Tradeoff: Request size grows with the conversation, and the client can rewrite history. Tool calls and tool results from earlier turns are not sent back, so the model sees only the text of earlier answers.
-- Would revisit if: Saved history is needed (then a checkpointer on Postgres), or conversations get long enough for request size to matter.
+- Tradeoff: Request size grows with the conversation, and the client can rewrite history. History is text only: tool calls and tool results from earlier turns are not sent back, so on a follow-up the model sees only its earlier answers, not the data behind them, and may answer from its own summary (stale or missing source URLs). The system prompt tells it to call the tools again instead of answering from earlier summaries, which costs extra tool calls and tokens per follow-up.
+- Would revisit if: Saved history is needed (then a checkpointer on Postgres, which also keeps tool results between turns), or conversations get long enough for request size to matter, or re-calling tools on follow-ups costs too much.
 
 ## Separate API_KEY for apps/api, same fail-closed middleware (Planned, M2 PR 1)
 - Decision: apps/api requires `Authorization: Bearer <API_KEY>` on everything except `/health`, using a copy of the MCP server's pure-ASGI middleware: constant-time compare, refuse to start when auth is on and the key is missing, `AUTH_DISABLED=true` for local testing only. `API_KEY` and `MCP_API_KEY` are different secrets.
@@ -59,8 +59,15 @@ A running log of key design decisions, newest last. Each entry should take about
 - Tradeoff: Two copies of the middleware can drift. The browser can't hold a secret, so in Milestone 3 the Next.js server, not the browser, sends `API_KEY`.
 - Would revisit if: A third Python service needs the same middleware (then a shared package), or real users need their own access.
 
+## Claude Sonnet 5.5 as the default model (Planned, M2 PR 4)
+- Decision: `ANTHROPIC_MODEL` defaults to `claude-sonnet-5-5`.
+- Why: The agent's job is tool calling and summarizing job listings, which Sonnet handles well at half Opus 5.5's price ($2 / $10 per million input / output tokens vs $4 / $20). A public demo with a daily cap gets more runs out of the same budget.
+- Alternative rejected: `claude-opus-5-5`, the more capable model, which costs twice as much per token; its extra capability is better spent later, on the orchestrator's planning.
+- Tradeoff: Weaker on hard multi-step reasoning, which matters more once the orchestrator plans four parallel workers.
+- Would revisit if: Answers miss facts the tools returned, or the orchestrator needs stronger planning (then Opus for the orchestrator only).
+
 ## Local-first Milestone 2 (Planned, M2)
-- Decision: apps/api runs on `127.0.0.1:8001` and talks to the local MCP server at `http://127.0.0.1:8000/mcp`. Docker, Railway, rate limiting and the daily run cap for apps/api move to Milestone 3.
+- Decision: apps/api runs on `127.0.0.1:8001` and talks to the local MCP server at `http://127.0.0.1:8000/mcp`. Docker, Railway, rate limiting and the daily run cap for apps/api move to Milestone 3, where the rate limit and cap PR lands before the deploy PR so the public URL is never uncapped.
 - Why: The agent loop is the risk in this milestone. Running both servers locally gives the fastest feedback, and deployment is already proven by the MCP server in Milestone 1.
 - Alternative rejected: Deploying apps/api to Railway in this milestone, which adds a second deploy before the agent works.
 - Tradeoff: Milestone 2 ends without a live URL. Milestone 3 gets bigger (deploy the API and the web app).
