@@ -75,7 +75,7 @@ Invariant: **every fact carries a source URL.** A fact without a source is dropp
 
 Only the current milestone gets built.
 
-1. **MCP server, one tool.** Ashby open roles tool, tested locally, deployed to Railway, verified from Claude Code.
+1. **MCP server, one tool.** Ashby open roles tool, tested locally, deployed to Railway, verified from Claude Code. Status: code complete (PRs #2–#5); Railway deploy and local Docker validation pending. Milestone 2 proceeds locally in the meantime.
 2. **Agent end to end, locally.** LangGraph agent in `apps/api` working through the MCP server, both running locally. See [Milestone 2 plan](#milestone-2-plan-agent-end-to-end-appsapi).
 3. **Chat UI.** Simple Next.js UI, deployed to Vercel. Also deploys `apps/api` to Railway, moved here from Milestone 2: first a PR adding per-IP rate limiting and the daily run cap, then the deploy PR (Dockerfile, private network to the MCP server), so the public URL is never uncapped.
 4. **Polish and breadth.** README, example reports, more tools (SEC EDGAR, web search, GitHub).
@@ -230,7 +230,7 @@ Directories appear only when their milestone starts. Target shape:
     │   ├── pyproject.toml        # uv-managed
     │   ├── uv.lock
     │   ├── .env.example          # MCP_API_KEY, PORT
-    │   ├── Dockerfile            # or Railway config; decided in the M1 deploy PR
+    │   ├── Dockerfile            # multi-stage uv build (PR #5); railway.json alongside.
     │   ├── src/job_research_mcp/
     │   │   ├── server.py         # app, Streamable HTTP transport, bearer auth
     │   │   └── tools/
