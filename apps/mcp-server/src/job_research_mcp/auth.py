@@ -40,7 +40,12 @@ def api_key_from_env(environ: Mapping[str, str]) -> str | None:
 
 
 class BearerAuthMiddleware:
-    """Pure ASGI middleware: 401 unless the bearer token matches. Lifespan and public paths pass through."""
+    """Pure ASGI middleware: reject unless the bearer token matches.
+
+    Only lifespan events and HTTP requests to public paths pass through unchecked.
+    Every other scope (HTTP, and websocket should one ever be routed) needs the token;
+    a rejected websocket is closed before accept, since it can't carry an HTTP 401.
+    """
 
     def __init__(self, app: ASGIApp, api_key: str, public_paths: Collection[str] = PUBLIC_PATHS) -> None:
         if not api_key:
@@ -50,12 +55,15 @@ class BearerAuthMiddleware:
         self.public_paths = public_paths
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope["path"] in self.public_paths:
+        if scope["type"] == "lifespan" or (scope["type"] == "http" and scope["path"] in self.public_paths):
             await self.app(scope, receive, send)
             return
-        scheme, _, token = dict(scope["headers"]).get(b"authorization", b"").partition(b" ")
+        scheme, _, token = dict(scope.get("headers", [])).get(b"authorization", b"").partition(b" ")
         if scheme.lower() == b"bearer" and hmac.compare_digest(token.strip(), self._api_key):
             await self.app(scope, receive, send)
+            return
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 1008})  # 1008 = policy violation; servers answer 403
             return
         await _unauthorized(send)
 

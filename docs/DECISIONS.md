@@ -18,15 +18,15 @@ A running log of key design decisions, newest last. Each entry should take about
 - Would revisit if: The agent needs description text (e.g. tech-stack extraction); then add a separate per-job tool rather than widening this one. Or if token cost or context size becomes a problem; then keep `structuredContent` as the real data and return a short text summary instead of the full copy (e.g. "27 matching jobs at Ashby out of 63").
 
 ## Static bearer-token middleware (PR #4)
-- Decision: A small pure-ASGI middleware requires `Authorization: Bearer <MCP_API_KEY>` on everything except `/health` (constant-time compare). With auth on and no key, the server refuses to start. `AUTH_DISABLED=true` is for local testing only.
-- Why: One shared secret between the agent and the owner's own clients needs nothing more. Failing at startup means a misconfigured deploy can't run open.
+- Decision: A small pure-ASGI middleware requires `Authorization: Bearer <MCP_API_KEY>` on everything except `/health` (constant-time compare). With auth on and no key, the server refuses to start. `AUTH_DISABLED=true` is for local testing only and is refused unless `HOST` is loopback (PR #5). Only lifespan events pass through unchecked; a websocket without a token is closed.
+- Why: One shared secret between the agent and the owner's own clients needs nothing more. Failing at startup means a misconfigured deploy can't run open, including a stray `AUTH_DISABLED` variable on a container bound to `0.0.0.0`.
 - Alternative rejected: The SDK's built-in auth (`TokenVerifier` + `AuthSettings`). It is shaped for OAuth resource servers (issuer URL, protected-resource metadata) and advertises OAuth discovery, which clients then try to follow.
 - Tradeoff: No per-user identity, scopes or expiry. Rotating the key means updating every client. Claude Desktop custom connectors can't send custom headers, so they need `AUTH_DISABLED` locally.
 - Would revisit if: Other people need their own access, or an OAuth-only client (e.g. a Claude Desktop custom connector) must reach the deployed server.
 
-## Dockerfile for Railway (Planned, PR 4)
-- Decision: Build `apps/mcp-server` from a Dockerfile (uv, `uv sync --frozen`, non-root, binds `0.0.0.0:$PORT`).
-- Why: It builds the same way on a laptop and on Railway, and it pins the Python and uv versions.
-- Alternative rejected: Railway's auto-detected builder (Railpack), which is less to write but less predictable in a monorepo subdirectory and harder to reproduce locally.
-- Tradeoff: One more file to maintain, and base-image updates are on us.
+## Dockerfile for Railway (PR #5)
+- Decision: Build `apps/mcp-server` from a multi-stage Dockerfile: uv pinned from its official image, `uv sync --frozen --no-dev`, a slim non-root runtime that binds `0.0.0.0:$PORT`. `railway.json` adds a `/health` healthcheck and limits redeploys to `apps/mcp-server/**`.
+- Why: It builds the same image on a laptop and on Railway, pins the Python and uv versions, and installs exactly what `uv.lock` says.
+- Alternative rejected: Railway's auto-detected builder (Railpack). Less to write, but less predictable in a monorepo subdirectory and harder to reproduce locally.
+- Tradeoff: Two more files to maintain, and keeping the base image and uv version up to date is on us.
 - Would revisit if: Railpack's uv support makes the Dockerfile redundant, or we move off Railway.
