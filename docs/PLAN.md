@@ -141,12 +141,13 @@ Commands below run in the remaining right pane, from `apps/api` with the same `.
 ### PR 2: load MCP tools at startup
 
 - Scope: `MCPAdapter` from `langchain.mcp` wrapping `fastmcp.Client(MCP_SERVER_URL, auth=MCP_API_KEY)` (default URL `http://127.0.0.1:8000/mcp`; the string `auth` becomes a bearer token). In the FastAPI lifespan, the adapter's context is entered, `list_tools()` runs once, the tools go on `app.state.tools`, and the client stays open until shutdown. Startup fails with a clear message if the MCP server is down or rejects the key. The `LangChainBetaWarning` from importing `langchain.mcp` is silenced in one place, with a comment saying why. An authenticated `GET /tools` lists the loaded tool names and descriptions, so the wiring is checkable before the agent exists. Adds the one opt-in integration test.
-- Files: `src/job_research_api/{mcp_tools,main}.py`, `tests/test_mcp_tools.py`, `tests/test_integration.py`, `pyproject.toml` (adds `langchain[mcp]>=1.4.0,<1.5`, `integration` pytest marker), `uv.lock`, `.env.example` (adds `MCP_SERVER_URL`, `MCP_API_KEY`), `README.md`, `docs/DECISIONS.md`.
+- Files: `src/job_research_api/{mcp_tools,main}.py`, `tests/mcp_fixture.py` (the in-process test server, reused by PR 3), `tests/test_mcp_tools.py`, `tests/test_integration.py`, `pyproject.toml` (adds `langchain[mcp]>=1.4.0,<1.5`, `integration` pytest marker), `uv.lock`, `.env.example` (adds `MCP_SERVER_URL`, `MCP_API_KEY`), `README.md`, `docs/DECISIONS.md`.
 - Acceptance criteria:
   - With the MCP server running, `GET /tools` lists `ping` and `get_ashby_jobs`.
   - With the MCP server stopped, or a wrong `MCP_API_KEY`, apps/api refuses to start and names the cause.
-  - Unit tests run without network, against a tiny in-process `MCPServer` that `MCPAdapter` accepts directly as its target:
-    - A tool that runs and reports an error (`isError`) returns a `ToolMessage` with `status="error"` carrying the server's message. It does not raise.
+  - Unit tests run without network, against a tiny in-process `MCPServer` (`tests/mcp_fixture.py`) that `MCPAdapter` accepts directly as its target. Its failing tool raises `ToolError`, as `get_ashby_jobs` does, because the server passes a `ToolError`'s message through but masks any other exception as "Error executing tool <name>".
+    - A tool that runs and reports an error (`isError`) never raises to the caller. The adapter's tool raises a `ToolException` internally and its own `handle_tool_error` catches it, so invoking it with a tool call returns a `ToolMessage` with `status="error"` carrying the server's message.
+    - Arguments the server rejects (e.g. a missing required argument) come back the same way, as an `isError` result, because the adapter does not validate arguments client side.
     - A transport failure (the client pointed at a closed localhost port) raises out of the tool call. It is not turned into a `ToolMessage`.
     - A successful call returns the tool's text, with `structuredContent` in the message's artifact.
   - `RUN_INTEGRATION_TESTS=1 uv run pytest -m integration` loads tools from the real local MCP server and calls `ping` through the adapter (gets `"pong"`). Skipped by default.
@@ -160,13 +161,15 @@ Commands below run in the remaining right pane, from `apps/api` with the same `.
 
 ### PR 3: the agent graph
 
-- Scope: `build_graph(model, tools)` returns a compiled `StateGraph(MessagesState)` with a `model` node (system prompt + `model.bind_tools(tools)`), a `ToolNode(tools)`, and a hand-written conditional edge (`tools` if the last AI message has tool calls, else `END`). The model and tools are injected, so tests pass fakes. The system prompt tells the model to cite a source URL for every fact, to say when a tool found nothing, and to call the tools again for any fact a follow-up needs instead of answering from earlier turns' summaries. `AGENT_RECURSION_LIMIT` (default 25) is applied on every run. No HTTP endpoint yet.
-- Files: `src/job_research_api/{graph,prompts}.py`, `tests/fakes.py` (scripted fake chat model), `tests/test_graph.py`, `tests/test_integration.py` (extended), `pyproject.toml` (adds `langgraph`, `langchain-anthropic`), `docs/DECISIONS.md`.
+- Scope: `build_graph(model, tools)` returns a compiled `StateGraph(MessagesState)` with a `model` node (system prompt + `model.bind_tools(tools)`), a `ToolNode(tools, handle_tool_errors=False)`, and a hand-written conditional edge (`tools` if the last AI message has tool calls, else `END`). The model and tools are injected, so tests pass fakes. The system prompt tells the model to cite a source URL for every fact, to say when a tool found nothing, and to call the tools again for any fact a follow-up needs instead of answering from earlier turns' summaries. `AGENT_RECURSION_LIMIT` (default 10, which allows 4 tool rounds) is applied on every run. `handle_tool_errors=False` is set explicitly, so the `ToolNode` turns no exception into a message: every error `ToolMessage` comes from the MCP tool itself (PR 2), and anything else ends the run. No HTTP endpoint yet.
+- Files: `src/job_research_api/{graph,prompts}.py`, `tests/fakes.py` (scripted fake chat model), `tests/test_graph.py` (uses PR 2's `tests/mcp_fixture.py`), `tests/test_integration.py` (extended), `pyproject.toml` (adds `langgraph`, `langchain-anthropic`), `docs/DECISIONS.md`.
 - Acceptance criteria:
   - A scripted run of "tool call, then final answer" visits `model → tools → model → END`, and the final message contains the tool result's URL.
   - A run with no tool calls ends after one model step.
-  - A model that always calls a tool stops with `GraphRecursionError` at the configured limit.
-  - A tool error (`ToolException`, as the MCP tools raise for `isError`) comes back to the model as a `ToolMessage` with `status="error"` and the loop continues; any other exception, such as a transport failure, propagates out of the graph (`ToolNode`'s default error handling).
+  - With the limit at 10, a scripted run of 4 tool rounds then an answer completes, and 5 rounds stops with `GraphRecursionError`.
+  - Error paths use PR 2's in-process MCP server and real adapter tools, not hand-made fakes, and assert what the locked versions do:
+    - Its failing tool's `isError` result reaches the model as a `ToolMessage` with `status="error"` and the server's message, and the loop goes on to the next model step.
+    - A transport failure (an adapter tool whose client points at a closed localhost port) propagates out of `ainvoke` as an exception. With fastmcp 4.1.0 it is a `RuntimeError` ("Client failed to connect"); the test asserts that it raises and that no `ToolMessage` was produced, not the exact class.
   - The system prompt contains the cite-every-fact and re-call-tools instructions (asserted, so they can't be dropped silently).
   - The integration test drives the graph with the scripted model against the real MCP server (`get_ashby_jobs` for board `ashby`) and gets a `ToolMessage` with `jobs.ashbyhq.com` URLs. Still no Claude call.
 - Test locally:
@@ -239,7 +242,7 @@ Directories appear only when their milestone starts. Target shape:
     │   ├── src/job_research_api/
     │   │   ├── main.py           # FastAPI app, lifespan, /chat
     │   │   ├── auth.py           # API_KEY bearer middleware
-    │   │   ├── mcp_tools.py      # loads MCP tools via langchain-mcp-adapters
+    │   │   ├── mcp_tools.py      # loads MCP tools via langchain.mcp (MCPAdapter)
     │   │   ├── graph.py          # model node + ToolNode loop (orchestrator-workers later)
     │   │   └── report.py         # later: report schema (every fact has a source URL)
     │   └── tests/
