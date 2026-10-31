@@ -23,14 +23,14 @@ pnpm dev
 
 Open http://localhost:3000.
 
-`ANTHROPIC_MODEL` is optional and defaults to `claude-sonnet-5-5`. Web search must be enabled for your organization in the Claude Console.
+`ANTHROPIC_MODEL` is optional and defaults to `claude-sonnet-5-5`. `SITE_USERNAME` and `SITE_PASSWORD` set the browser login that protects the whole site (`src/proxy.ts`); the site returns 503 until both are set. Web search must be enabled for your organization in the Claude Console.
 
 ## Deployment
 
 Pushing to `main` deploys to production through Vercel's Git integration. One-time setup:
 
 1. In Vercel, **Add New → Project** and import this GitHub repo. Keep the Next.js preset.
-2. Add `ANTHROPIC_API_KEY` (and optionally `ANTHROPIC_MODEL`) under **Settings → Environment Variables** for Production and Preview.
+2. Add `ANTHROPIC_API_KEY`, `SITE_USERNAME`, and `SITE_PASSWORD` (and optionally `ANTHROPIC_MODEL`) under **Settings → Environment Variables** for Production and Preview.
 3. Deploy. After that, every push to `main` deploys to production and other branches get preview URLs.
 
 The chat route sets `maxDuration = 300`, which needs Fluid compute. It's on by default for new Vercel projects.
